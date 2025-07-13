@@ -2,102 +2,352 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hand-Tracking Drawing App</title>
   <style>
-    body { margin: 0; overflow: hidden; }
-    video, canvas { position: absolute; top: 0; left: 0; }
+    body { 
+      margin: 0; 
+      overflow: hidden; 
+      background: #111;
+      font-family: Arial, sans-serif;
+    }
+    
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    #video {
+      display: none;
+    }
+    
+    #canvas {
+      border: 2px solid #333;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+    
+    #status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: white;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-size: 14px;
+    }
+    
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+    }
+    
+    button {
+      padding: 10px 20px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    button:hover {
+      background: #45a049;
+    }
+    
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+    
+    .gesture-indicator {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: white;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-size: 14px;
+    }
+    
+    .peace-sign {
+      background: rgba(76, 175, 80, 0.8) !important;
+    }
   </style>
 </head>
 <body>
-  <video id="video" width="640" height="480" autoplay style="display:none;"></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+  <div id="container">
+    <video id="video" width="640" height="480" autoplay playsinline></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    
+    <div id="status">Initializing camera...</div>
+    
+    <div class="gesture-indicator" id="gesture">
+      Make peace sign to draw ✌️
+    </div>
+    
+    <div id="controls">
+      <button id="clearBtn">Clear Canvas</button>
+      <button id="colorBtn">Change Color</button>
+      <button id="toggleBtn">Toggle Camera</button>
+    </div>
+  </div>
 
-  <!-- MediaPipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
+  <!-- MediaPipe Hands from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/hands.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/camera_utils.min.js"></script>
+  
   <script>
-    const videoElement  = document.getElementById('video');
+    const videoElement = document.getElementById('video');
     const canvasElement = document.getElementById('canvas');
-    const ctx           = canvasElement.getContext('2d');
-
+    const ctx = canvasElement.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const gestureDiv = document.getElementById('gesture');
+    const clearBtn = document.getElementById('clearBtn');
+    const colorBtn = document.getElementById('colorBtn');
+    const toggleBtn = document.getElementById('toggleBtn');
+    
     let lastX = null, lastY = null;
-
-    // Initialize MediaPipe Hands
-    const hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-    hands.setOptions({
-      maxNumHands:            1,
-      modelComplexity:        1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence:  0.7
-    });
-    hands.onResults(onResults);
-
-    // Start the camera
-    const camera = new Camera(videoElement, {
-      onFrame: async () => await hands.send({image: videoElement}),
-      width:  640,
-      height: 480
-    });
-    camera.start();
-
-    function onResults(results) {
-      // 1) Clear & draw flipped camera feed
-      ctx.save();
-      ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      ctx.translate(canvasElement.width, 0);
-      ctx.scale(-1, 1);
-      ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-      ctx.restore();
-
-      if (results.multiHandLandmarks?.length) {
-        const landmarks = results.multiHandLandmarks[0];
-
-        // Calculate index-finger tip coords
-        const ix = landmarks[8].x * canvasElement.width;
-        const iy = landmarks[8].y * canvasElement.height;
-        const drawX = canvasElement.width - ix;
-        const drawY = iy;
-
-        // 2) Draw red debug dot at index fingertip
-        ctx.fillStyle = 'red';
-        ctx.beginPath();
-        ctx.arc(drawX, drawY, 8, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 3) Detect “peace sign”:
-        const isExtended = (tip, pip) => landmarks[tip].y < landmarks[pip].y;
-        const isFolded   = (tip, pip) => landmarks[tip].y > landmarks[pip].y;
-
-        const idxUp   = isExtended(8, 6);
-        const midUp   = isExtended(12,10);
-        const ringDn  = isFolded(16,14);
-        const pinkyDn = isFolded(20,18);
-
-        const isPeace = idxUp && midUp && ringDn && pinkyDn;
-
-        if (isPeace) {
-          // 4) Draw line from last point → current
-          ctx.strokeStyle = 'red';      // default stroke color
-          ctx.lineWidth   = 5;
-          ctx.lineCap     = 'round';
-          if (lastX !== null && lastY !== null) {
-            ctx.beginPath();
-            ctx.moveTo(lastX, lastY);
-            ctx.lineTo(drawX, drawY);
-            ctx.stroke();
+    let isDrawing = false;
+    let drawingColor = '#ff0000';
+    let showCamera = true;
+    let isInitialized = false;
+    
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff'];
+    let colorIndex = 0;
+    
+    // Fallback if MediaPipe doesn't load
+    if (typeof Hands === 'undefined') {
+      console.error('MediaPipe not loaded, using fallback');
+      initFallback();
+    } else {
+      initMediaPipe();
+    }
+    
+    function initMediaPipe() {
+      try {
+        const hands = new Hands({
+          locateFile: (file) => {
+            return `https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/${file}`;
           }
-          lastX = drawX;
-          lastY = drawY;
-        } else {
-          // Reset when not making peace sign
-          lastX = lastY = null;
-        }
-      } else {
-        // No hand → reset
-        lastX = lastY = null;
+        });
+        
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.7,
+          minTrackingConfidence: 0.7
+        });
+        
+        hands.onResults(onResults);
+        
+        const camera = new Camera(videoElement, {
+          onFrame: async () => {
+            if (isInitialized) {
+              await hands.send({image: videoElement});
+            }
+          },
+          width: 640,
+          height: 480
+        });
+        
+        camera.start().then(() => {
+          statusDiv.textContent = 'Camera ready! Make peace sign to draw ✌️';
+          isInitialized = true;
+        }).catch(err => {
+          console.error('Camera error:', err);
+          statusDiv.textContent = 'Camera access denied. Please allow camera access and refresh.';
+        });
+        
+      } catch (error) {
+        console.error('MediaPipe initialization error:', error);
+        initFallback();
       }
     }
+    
+    function initFallback() {
+      statusDiv.textContent = 'Hand tracking not available. Click to draw!';
+      
+      // Simple mouse/touch drawing as fallback
+      let isMouseDrawing = false;
+      
+      canvasElement.addEventListener('mousedown', (e) => {
+        isMouseDrawing = true;
+        const rect = canvasElement.getBoundingClientRect();
+        lastX = e.clientX - rect.left;
+        lastY = e.clientY - rect.top;
+      });
+      
+      canvasElement.addEventListener('mousemove', (e) => {
+        if (!isMouseDrawing) return;
+        
+        const rect = canvasElement.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        drawLine(lastX, lastY, x, y);
+        lastX = x;
+        lastY = y;
+      });
+      
+      canvasElement.addEventListener('mouseup', () => {
+        isMouseDrawing = false;
+        lastX = lastY = null;
+      });
+      
+      // Touch support
+      canvasElement.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        isMouseDrawing = true;
+        const rect = canvasElement.getBoundingClientRect();
+        const touch = e.touches[0];
+        lastX = touch.clientX - rect.left;
+        lastY = touch.clientY - rect.top;
+      });
+      
+      canvasElement.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        if (!isMouseDrawing) return;
+        
+        const rect = canvasElement.getBoundingClientRect();
+        const touch = e.touches[0];
+        const x = touch.clientX - rect.left;
+        const y = touch.clientY - rect.top;
+        
+        drawLine(lastX, lastY, x, y);
+        lastX = x;
+        lastY = y;
+      });
+      
+      canvasElement.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        isMouseDrawing = false;
+        lastX = lastY = null;
+      });
+    }
+    
+    function onResults(results) {
+      // Clear canvas and draw camera feed if enabled
+      ctx.save();
+      ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      
+      if (showCamera) {
+        // Mirror the camera feed
+        ctx.translate(canvasElement.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        ctx.restore();
+      }
+      
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        
+        // Get index finger tip position (landmark 8)
+        const indexTip = landmarks[8];
+        const x = canvasElement.width - (indexTip.x * canvasElement.width); // Mirror X
+        const y = indexTip.y * canvasElement.height;
+        
+        // Draw fingertip indicator
+        ctx.fillStyle = drawingColor;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Detect peace sign gesture
+        const isPeaceSign = detectPeaceSign(landmarks);
+        
+        // Update gesture indicator
+        if (isPeaceSign) {
+          gestureDiv.textContent = 'Drawing! ✌️';
+          gestureDiv.classList.add('peace-sign');
+          
+          // Draw line if we have a previous position
+          if (lastX !== null && lastY !== null) {
+            drawLine(lastX, lastY, x, y);
+          }
+          
+          lastX = x;
+          lastY = y;
+          isDrawing = true;
+        } else {
+          gestureDiv.textContent = 'Make peace sign to draw ✌️';
+          gestureDiv.classList.remove('peace-sign');
+          lastX = lastY = null;
+          isDrawing = false;
+        }
+        
+        statusDiv.textContent = `Hand detected! ${isPeaceSign ? 'Drawing mode' : 'Move to peace sign'}`;
+      } else {
+        // No hand detected
+        lastX = lastY = null;
+        isDrawing = false;
+        gestureDiv.textContent = 'Show your hand ✋';
+        gestureDiv.classList.remove('peace-sign');
+        statusDiv.textContent = 'No hand detected. Show your hand to the camera.';
+      }
+    }
+    
+    function detectPeaceSign(landmarks) {
+      // Check if index and middle fingers are extended, ring and pinky folded
+      const indexExtended = landmarks[8].y < landmarks[6].y; // Index tip above PIP
+      const middleExtended = landmarks[12].y < landmarks[10].y; // Middle tip above PIP
+      const ringFolded = landmarks[16].y > landmarks[14].y; // Ring tip below PIP
+      const pinkyFolded = landmarks[20].y > landmarks[18].y; // Pinky tip below PIP
+      
+      return indexExtended && middleExtended && ringFolded && pinkyFolded;
+    }
+    
+    function drawLine(x1, y1, x2, y2) {
+      ctx.save();
+      ctx.strokeStyle = drawingColor;
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    
+    // Event listeners for controls
+    clearBtn.addEventListener('click', () => {
+      ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      statusDiv.textContent = 'Canvas cleared!';
+      setTimeout(() => {
+        statusDiv.textContent = 'Make peace sign to draw ✌️';
+      }, 2000);
+    });
+    
+    colorBtn.addEventListener('click', () => {
+      colorIndex = (colorIndex + 1) % colors.length;
+      drawingColor = colors[colorIndex];
+      statusDiv.textContent = `Color changed to ${drawingColor}`;
+      setTimeout(() => {
+        statusDiv.textContent = 'Make peace sign to draw ✌️';
+      }, 2000);
+    });
+    
+    toggleBtn.addEventListener('click', () => {
+      showCamera = !showCamera;
+      toggleBtn.textContent = showCamera ? 'Hide Camera' : 'Show Camera';
+    });
+    
+    // Initialize canvas with dark background
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
   </script>
 </body>
 </html>
