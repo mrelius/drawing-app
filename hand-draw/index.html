@@ -91,7 +91,7 @@
     <video id="video" width="640" height="480" autoplay playsinline></video>
     <canvas id="canvas" width="640" height="480"></canvas>
     
-    <div id="status">Initializing camera...</div>
+    <div id="status">Loading hand tracking...</div>
     
     <div class="gesture-indicator" id="gesture">
       Make peace sign to draw ✌️
@@ -104,11 +104,12 @@
     </div>
   </div>
 
-  <!-- MediaPipe Hands from CDN -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/hands.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/camera_utils.min.js"></script>
+  <!-- New MediaPipe Tasks Vision -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js"></script>
   
   <script>
+    const { HandLandmarker, FilesetResolver } = window.MediaPipeTasksVision;
+    
     const videoElement = document.getElementById('video');
     const canvasElement = document.getElementById('canvas');
     const ctx = canvasElement.getContext('2d');
@@ -118,68 +119,176 @@
     const colorBtn = document.getElementById('colorBtn');
     const toggleBtn = document.getElementById('toggleBtn');
     
+    let handLandmarker = null;
+    let runningMode = "VIDEO";
+    let enableWebcamButton = null;
+    let webcamRunning = false;
+    
     let lastX = null, lastY = null;
     let isDrawing = false;
     let drawingColor = '#ff0000';
     let showCamera = true;
-    let isInitialized = false;
     
     const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff'];
     let colorIndex = 0;
     
-    // Fallback if MediaPipe doesn't load
-    if (typeof Hands === 'undefined') {
-      console.error('MediaPipe not loaded, using fallback');
-      initFallback();
-    } else {
-      initMediaPipe();
-    }
-    
-    function initMediaPipe() {
+    // Initialize MediaPipe
+    async function initializeHandLandmarker() {
       try {
-        const hands = new Hands({
-          locateFile: (file) => {
-            return `https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/${file}`;
-          }
-        });
+        statusDiv.textContent = 'Loading MediaPipe models...';
         
-        hands.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.7,
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
+        
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: runningMode,
+          numHands: 1,
+          minHandDetectionConfidence: 0.7,
+          minHandPresenceConfidence: 0.7,
           minTrackingConfidence: 0.7
         });
         
-        hands.onResults(onResults);
-        
-        const camera = new Camera(videoElement, {
-          onFrame: async () => {
-            if (isInitialized) {
-              await hands.send({image: videoElement});
-            }
-          },
-          width: 640,
-          height: 480
-        });
-        
-        camera.start().then(() => {
-          statusDiv.textContent = 'Camera ready! Make peace sign to draw ✌️';
-          isInitialized = true;
-        }).catch(err => {
-          console.error('Camera error:', err);
-          statusDiv.textContent = 'Camera access denied. Please allow camera access and refresh.';
-        });
+        statusDiv.textContent = 'MediaPipe loaded! Starting camera...';
+        enableCam();
         
       } catch (error) {
-        console.error('MediaPipe initialization error:', error);
-        initFallback();
+        console.error('Error initializing MediaPipe:', error);
+        statusDiv.textContent = 'Failed to load hand tracking. Using mouse/touch mode.';
+        initFallbackMode();
       }
     }
     
-    function initFallback() {
-      statusDiv.textContent = 'Hand tracking not available. Click to draw!';
+    async function enableCam() {
+      if (!handLandmarker) {
+        console.log("Wait! objectDetector not loaded yet.");
+        return;
+      }
       
-      // Simple mouse/touch drawing as fallback
+      webcamRunning = !webcamRunning;
+      
+      if (webcamRunning) {
+        const constraints = {
+          video: {
+            width: 640,
+            height: 480,
+            facingMode: 'user'
+          }
+        };
+        
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          videoElement.srcObject = stream;
+          videoElement.addEventListener("loadeddata", predictWebcam);
+          statusDiv.textContent = 'Camera ready! Make peace sign to draw ✌️';
+        } catch (error) {
+          console.error('Error accessing camera:', error);
+          statusDiv.textContent = 'Camera access denied. Using mouse/touch mode.';
+          initFallbackMode();
+        }
+      }
+    }
+    
+    async function predictWebcam() {
+      if (!webcamRunning) return;
+      
+      let startTimeMs = performance.now();
+      
+      if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+        const results = handLandmarker.detectForVideo(videoElement, startTimeMs);
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        
+        // Draw camera feed if enabled
+        if (showCamera) {
+          ctx.save();
+          ctx.translate(canvasElement.width, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+          ctx.restore();
+        }
+        
+        // Process hand landmarks
+        if (results.landmarks && results.landmarks.length > 0) {
+          const landmarks = results.landmarks[0];
+          
+          // Get index finger tip (landmark 8)
+          const indexTip = landmarks[8];
+          const x = canvasElement.width - (indexTip.x * canvasElement.width); // Mirror X
+          const y = indexTip.y * canvasElement.height;
+          
+          // Draw fingertip indicator
+          ctx.fillStyle = drawingColor;
+          ctx.beginPath();
+          ctx.arc(x, y, 8, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Detect peace sign
+          const isPeaceSign = detectPeaceSign(landmarks);
+          
+          if (isPeaceSign) {
+            gestureDiv.textContent = 'Drawing! ✌️';
+            gestureDiv.classList.add('peace-sign');
+            
+            if (lastX !== null && lastY !== null) {
+              drawLine(lastX, lastY, x, y);
+            }
+            
+            lastX = x;
+            lastY = y;
+          } else {
+            gestureDiv.textContent = 'Make peace sign to draw ✌️';
+            gestureDiv.classList.remove('peace-sign');
+            lastX = lastY = null;
+          }
+          
+          statusDiv.textContent = `Hand detected! ${isPeaceSign ? 'Drawing mode' : 'Show peace sign'}`;
+        } else {
+          lastX = lastY = null;
+          gestureDiv.textContent = 'Show your hand ✋';
+          gestureDiv.classList.remove('peace-sign');
+          statusDiv.textContent = 'No hand detected. Show your hand to camera.';
+        }
+      }
+      
+      // Continue prediction loop
+      if (webcamRunning) {
+        window.requestAnimationFrame(predictWebcam);
+      }
+    }
+    
+    function detectPeaceSign(landmarks) {
+      // Check finger positions - peace sign = index and middle up, ring and pinky down
+      const indexUp = landmarks[8].y < landmarks[6].y;    // Index tip above PIP
+      const middleUp = landmarks[12].y < landmarks[10].y;  // Middle tip above PIP  
+      const ringDown = landmarks[16].y > landmarks[14].y;  // Ring tip below PIP
+      const pinkyDown = landmarks[20].y > landmarks[18].y; // Pinky tip below PIP
+      
+      return indexUp && middleUp && ringDown && pinkyDown;
+    }
+    
+    function drawLine(x1, y1, x2, y2) {
+      ctx.save();
+      ctx.strokeStyle = drawingColor;
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalCompositeOperation = 'source-over';
+      
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    
+    function initFallbackMode() {
+      // Mouse/touch drawing fallback
       let isMouseDrawing = false;
       
       canvasElement.addEventListener('mousedown', (e) => {
@@ -237,92 +346,7 @@
       });
     }
     
-    function onResults(results) {
-      // Clear canvas and draw camera feed if enabled
-      ctx.save();
-      ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      
-      if (showCamera) {
-        // Mirror the camera feed
-        ctx.translate(canvasElement.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-        ctx.restore();
-      }
-      
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        
-        // Get index finger tip position (landmark 8)
-        const indexTip = landmarks[8];
-        const x = canvasElement.width - (indexTip.x * canvasElement.width); // Mirror X
-        const y = indexTip.y * canvasElement.height;
-        
-        // Draw fingertip indicator
-        ctx.fillStyle = drawingColor;
-        ctx.beginPath();
-        ctx.arc(x, y, 8, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Detect peace sign gesture
-        const isPeaceSign = detectPeaceSign(landmarks);
-        
-        // Update gesture indicator
-        if (isPeaceSign) {
-          gestureDiv.textContent = 'Drawing! ✌️';
-          gestureDiv.classList.add('peace-sign');
-          
-          // Draw line if we have a previous position
-          if (lastX !== null && lastY !== null) {
-            drawLine(lastX, lastY, x, y);
-          }
-          
-          lastX = x;
-          lastY = y;
-          isDrawing = true;
-        } else {
-          gestureDiv.textContent = 'Make peace sign to draw ✌️';
-          gestureDiv.classList.remove('peace-sign');
-          lastX = lastY = null;
-          isDrawing = false;
-        }
-        
-        statusDiv.textContent = `Hand detected! ${isPeaceSign ? 'Drawing mode' : 'Move to peace sign'}`;
-      } else {
-        // No hand detected
-        lastX = lastY = null;
-        isDrawing = false;
-        gestureDiv.textContent = 'Show your hand ✋';
-        gestureDiv.classList.remove('peace-sign');
-        statusDiv.textContent = 'No hand detected. Show your hand to the camera.';
-      }
-    }
-    
-    function detectPeaceSign(landmarks) {
-      // Check if index and middle fingers are extended, ring and pinky folded
-      const indexExtended = landmarks[8].y < landmarks[6].y; // Index tip above PIP
-      const middleExtended = landmarks[12].y < landmarks[10].y; // Middle tip above PIP
-      const ringFolded = landmarks[16].y > landmarks[14].y; // Ring tip below PIP
-      const pinkyFolded = landmarks[20].y > landmarks[18].y; // Pinky tip below PIP
-      
-      return indexExtended && middleExtended && ringFolded && pinkyFolded;
-    }
-    
-    function drawLine(x1, y1, x2, y2) {
-      ctx.save();
-      ctx.strokeStyle = drawingColor;
-      ctx.lineWidth = 5;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-      ctx.restore();
-    }
-    
-    // Event listeners for controls
+    // Event listeners
     clearBtn.addEventListener('click', () => {
       ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       statusDiv.textContent = 'Canvas cleared!';
@@ -345,9 +369,12 @@
       toggleBtn.textContent = showCamera ? 'Hide Camera' : 'Show Camera';
     });
     
-    // Initialize canvas with dark background
+    // Initialize canvas
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    // Start the app
+    initializeHandLandmarker();
   </script>
 </body>
 </html>
