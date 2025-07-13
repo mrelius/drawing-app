@@ -2,19 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Hand-Tracked Drawing App (with Debug Indicator)</title>
+  <title>Hand-Tracked Drawing App (Debug)</title>
   <style>
-    body, html {
-      margin:0; padding:0; overflow:hidden; font-family:sans-serif;
-    }
+    body, html { margin:0; padding:0; overflow:hidden; font-family:sans-serif; }
     video, canvas {
       position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;
       transform: scaleX(-1); /* mirror */
     }
     #ui {
-      position:absolute; top:10px; left:10px;
-      background:rgba(255,255,255,0.8); padding:6px; border-radius:4px;
-      display:flex; gap:8px; z-index:10;
+      position:absolute; top:10px; left:10px; display:flex; gap:8px;
+      background:rgba(255,255,255,0.8); padding:6px; border-radius:4px; z-index:10;
     }
     #tutorial {
       position:absolute; top:0; left:0; width:100%; height:100%;
@@ -22,9 +19,7 @@
       display:flex; flex-direction:column; align-items:center; justify-content:center;
       text-align:center; padding:20px; box-sizing:border-box; z-index:20;
     }
-    #tutorial button {
-      margin-top:20px; padding:10px 20px; font-size:16px;
-    }
+    #tutorial button { margin-top:20px; padding:10px 20px; font-size:16px; }
   </style>
 </head>
 <body>
@@ -49,123 +44,125 @@
   </div>
 
   <!-- MediaPipe -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
   <script>
-    // DOM refs
-    const video       = document.getElementById('video'),
-          canvas      = document.getElementById('canvas'),
-          ctx         = canvas.getContext('2d'),
-          colorPicker = document.getElementById('colorPicker'),
-          saveBtn     = document.getElementById('saveBtn'),
-          shareBtn    = document.getElementById('shareBtn'),
-          tutorial    = document.getElementById('tutorial'),
-          tutBtn      = document.getElementById('tutorialBtn');
+  // — DOM refs —
+  const video       = document.getElementById('video'),
+        canvas      = document.getElementById('canvas'),
+        ctx         = canvas.getContext('2d'),
+        colorPicker = document.getElementById('colorPicker'),
+        saveBtn     = document.getElementById('saveBtn'),
+        shareBtn    = document.getElementById('shareBtn'),
+        tutorial    = document.getElementById('tutorial'),
+        tutBtn      = document.getElementById('tutorialBtn');
 
-    // state
-    let drawing   = false,
-        lastPos   = null,
-        strokeColor = colorPicker.value;
+  let drawing = false, lastPos = null, strokeColor = colorPicker.value;
 
-    // gesture helpers
-    function isIndexExtended(lm) { return lm[8].y < lm[6].y; }
-    function isFist(landmarks)   { return [8,12,16,20].every(i => landmarks[i].y > landmarks[i-2].y); }
+  // Gesture helpers
+  function isIndexExtended(lm){ return lm[8].y < lm[6].y; }
+  function isFist(lm){ return [8,12,16,20].every(i=>lm[i].y > lm[i-2].y); }
 
-    function onResults({multiHandLandmarks}) {
-      // match canvas to video
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
+  // onResults callback
+  function onResults({multiHandLandmarks}) {
+    // match canvas to video
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-      if (multiHandLandmarks.length) {
-        const lm = multiHandLandmarks[0];
+    if (multiHandLandmarks.length) {
+      const lm = multiHandLandmarks[0];
 
-        // mode switch
-        if (isIndexExtended(lm)) drawing = true;
-        else if (isFist(lm)) { drawing = false; lastPos = null; }
+      // detect mode
+      if (isIndexExtended(lm)) drawing = true;
+      else if (isFist(lm)) { drawing = false; lastPos = null; }
 
-        // compute mirrored coordinates
-        const x = (1 - lm[8].x) * canvas.width;
-        const y = lm[8].y * canvas.height;
+      // mirror-corrected coords
+      const x = (1 - lm[8].x) * canvas.width;
+      const y = lm[8].y * canvas.height;
 
-        // —— debug indicator —— 
-        ctx.fillStyle = 'red';
-        ctx.beginPath();
-        ctx.arc(x, y, 10, 0, 2*Math.PI);
-        ctx.fill();
+      // draw red debug dot
+      ctx.fillStyle = 'red';
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, 2 * Math.PI);
+      ctx.fill();
 
-        // —— actual drawing —— 
-        if (drawing) {
-          ctx.strokeStyle = strokeColor;
-          ctx.lineWidth   = 4;
-          ctx.lineCap     = 'round';
-          if (lastPos) {
-            ctx.beginPath();
-            ctx.moveTo(lastPos.x, lastPos.y);
-            ctx.lineTo(x, y);
-            ctx.stroke();
-          }
-          lastPos = {x, y};
+      // draw stroke if in drawing mode
+      if (drawing) {
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth   = 4;
+        ctx.lineCap     = 'round';
+        if (lastPos) {
+          ctx.beginPath();
+          ctx.moveTo(lastPos.x, lastPos.y);
+          ctx.lineTo(x, y);
+          ctx.stroke();
         }
-      } else {
-        drawing = false;
-        lastPos = null;
+        lastPos = { x, y };
       }
+    } else {
+      // no hand visible
+      drawing = false;
+      lastPos = null;
     }
+  }
 
-    // initialize MediaPipe Hands
-    const hands = new Hands({
-      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-    });
-    hands.setOptions({
-      maxNumHands:           1,
-      modelComplexity:       1,
-      minDetectionConfidence:0.8,
-      minTrackingConfidence: 0.8
-    });
-    hands.onResults(onResults);
+  // Initialize MediaPipe Hands
+  const hands = new Hands({
+    locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands:           1,
+    modelComplexity:       1,
+    minDetectionConfidence:0.8,
+    minTrackingConfidence: 0.8
+  });
+  hands.onResults(onResults);
 
-    // start camera
-    new Camera(video, {
-      onFrame: async () => await hands.send({image: video}),
-      width:   640,
-      height:  480
-    }).start()
-      .catch(() => alert('Serve over HTTPS/localhost & allow camera access.'));
+  // Manual camera loop (no external helper)
+  async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    await video.play();
+    // Feed every frame into Hands
+    (function frameLoop() {
+      hands.send({ image: video });
+      requestAnimationFrame(frameLoop);
+    })();
+  }
+  startCamera().catch(e=>{
+    alert('Error starting camera: ' + e.message);
+  });
 
-    // UI events
-    colorPicker .addEventListener('input', e => strokeColor = e.target.value);
-    saveBtn     .addEventListener('click', () => {
-      const link = document.createElement('a');
-      link.download = 'drawing.png';
-      link.href     = canvas.toDataURL('image/png');
-      link.click();
-    });
-    shareBtn    .addEventListener('click', async () => {
-      const dataUrl = canvas.toDataURL('image/png');
-      if (navigator.canShare?.({files:[]})) {
-        const blob = await (await fetch(dataUrl)).blob();
-        const file = new File([blob],'drawing.png',{type:'image/png'});
-        navigator.share({files:[file],title:'My Sketch'}).catch(console.error);
-      } else {
-        try {
-          await navigator.clipboard.writeText(dataUrl);
-          alert('Copied image data URL to clipboard!');
-        } catch {
-          alert('Share not supported—copied URL instead.');
-        }
-      }
-    });
+  // UI events
+  colorPicker.addEventListener('input', e => strokeColor = e.target.value);
 
-    // tutorial overlay
-    window.addEventListener('load', () => {
-      if (!localStorage.getItem('tutorialSeen')) tutorial.style.display = 'flex';
-    });
-    tutBtn.addEventListener('click', () => {
-      tutorial.style.display = 'none';
-      localStorage.setItem('tutorialSeen','true');
-    });
+  saveBtn.addEventListener('click', () => {
+    const link = document.createElement('a');
+    link.download = 'drawing.png';
+    link.href     = canvas.toDataURL('image/png');
+    link.click();
+  });
+
+  shareBtn.addEventListener('click', async () => {
+    const dataUrl = canvas.toDataURL('image/png');
+    if (navigator.canShare?.({ files: [] })) {
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], 'drawing.png', { type: 'image/png' });
+      navigator.share({ files: [file], title: 'My Sketch' }).catch(console.error);
+    } else {
+      await navigator.clipboard.writeText(dataUrl);
+      alert('Copied image data URL to clipboard!');
+    }
+  });
+
+  // Tutorial overlay
+  window.addEventListener('load', () => {
+    if (!localStorage.getItem('tutorialSeen')) tutorial.style.display = 'flex';
+  });
+  tutBtn.addEventListener('click', () => {
+    tutorial.style.display = 'none';
+    localStorage.setItem('tutorialSeen','true');
+  });
   </script>
 </body>
 </html>
