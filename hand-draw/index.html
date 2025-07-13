@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hand-Tracked Drawing App</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      display: flex;
+      gap: 8px;
+      background: rgba(255,255,255,0.8);
+      padding: 6px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+    #tutorial {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 20px;
+      box-sizing: border-box;
+      z-index: 20;
+    }
+    #tutorial button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Video feed and drawing canvas -->
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <!-- Toolbar: color picker + save/share -->
+  <div id="ui">
+    <input type="color" id="colorPicker" value="#000000" title="Choose pen color" />
+    <button id="saveBtn">Save</button>
+    <button id="shareBtn">Share</button>
+  </div>
+
+  <!-- First-time tutorial overlay -->
+  <div id="tutorial" style="display:none;">
+    <h1>Welcome!</h1>
+    <p>
+      1. Allow camera access when prompted.<br>
+      2. Center your hand in view.<br>
+      3. Point with your index finger to draw.<br>
+      4. Make a fist to pause.
+    </p>
+    <button id="tutorialBtn">Got it!</button>
+  </div>
+
+  <!-- MediaPipe and utilities -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+  <script>
+    // —— DOM refs ——
+    const videoElem = document.getElementById('video');
+    const canvasElem = document.getElementById('canvas');
+    const ctx = canvasElem.getContext('2d');
+    const colorPicker = document.getElementById('colorPicker');
+    const saveBtn = document.getElementById('saveBtn');
+    const shareBtn = document.getElementById('shareBtn');
+    const tutorial = document.getElementById('tutorial');
+    const tutBtn = document.getElementById('tutorialBtn');
+
+    // —— State ——
+    let drawing = false;
+    let lastPos = null;
+    let strokeColor = colorPicker.value;
+
+    // —— Helpers for gestures ——
+    function isIndexExtended(landmarks) {
+      // Tip above PIP means extended
+      return landmarks[8].y < landmarks[6].y;
+    }
+    function isFist(landmarks) {
+      // All fingertips below their PIPs means a fist
+      return [8,12,16,20].every(i => landmarks[i].y > landmarks[i - 2].y);
+    }
+
+    // —— Handle hand-landmarks results ——
+    function onResults(results) {
+      // Match canvas size to video
+      canvasElem.width = videoElem.videoWidth;
+      canvasElem.height = videoElem.videoHeight;
+
+      const handsData = results.multiHandLandmarks;
+      if (handsData && handsData.length > 0) {
+        const lm = handsData[0];
+        // Switch modes
+        if (isIndexExtended(lm)) {
+          drawing = true;
+        } else if (isFist(lm)) {
+          drawing = false;
+          lastPos = null;
+        }
+
+        // Draw if in draw mode
+        if (drawing) {
+          const x = lm[8].x * canvasElem.width;
+          const y = lm[8].y * canvasElem.height;
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = 4;
+          ctx.lineCap = 'round';
+          if (lastPos) {
+            ctx.beginPath();
+            ctx.moveTo(lastPos.x, lastPos.y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+          }
+          lastPos = { x, y };
+        }
+      } else {
+        // No hand visible
+        drawing = false;
+        lastPos = null;
+      }
+    }
+
+    // —— Initialize MediaPipe Hands ——
+    const hands = new Hands({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.8,
+      minTrackingConfidence: 0.8
+    });
+    hands.onResults(onResults);
+
+    // —— Start camera and send frames to Hands ——
+    const camera = new Camera(videoElem, {
+      onFrame: async () => await hands.send({ image: videoElem }),
+      width: 640,
+      height: 480
+    });
+    camera.start().catch(err => {
+      alert('📷 Please serve over HTTPS or localhost and allow camera access.');
+      console.error(err);
+    });
+
+    // —— UI hooks ——
+    colorPicker.addEventListener('input', e => strokeColor = e.target.value);
+
+    saveBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'drawing.png';
+      link.href = canvasElem.toDataURL('image/png');
+      link.click();
+    });
+
+    shareBtn.addEventListener('click', async () => {
+      const dataUrl = canvasElem.toDataURL('image/png');
+      if (navigator.canShare && navigator.canShare({ files: [] })) {
+        // Mobile native share
+        const blob = await (await fetch(dataUrl)).blob();
+        const file = new File([blob], 'drawing.png', { type: 'image/png' });
+        navigator.share({ files: [file], title: 'My Sketch' })
+          .catch(console.error);
+      } else {
+        // Fallback: clipboard
+        try {
+          await navigator.clipboard.writeText(dataUrl);
+          alert('Copied image data URL to clipboard!');
+        } catch {
+          alert('Share not supported—copied data URL instead.');
+        }
+      }
+    });
+
+    // —— Tutorial overlay ——
+    window.addEventListener('load', () => {
+      if (!localStorage.getItem('tutorialSeen')) {
+        tutorial.style.display = 'flex';
+      }
+    });
+    tutBtn.addEventListener('click', () => {
+      tutorial.style.display = 'none';
+      localStorage.setItem('tutorialSeen', 'true');
+    });
+  </script>
+</body>
+</html>
