@@ -22,13 +22,23 @@
     }
     
     #video {
-      display: none;
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: scaleX(-1);
+      z-index: 1;
     }
     
     #canvas {
       border: 2px solid #333;
       border-radius: 10px;
       box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 2;
+      background: transparent;
     }
     
     #status {
@@ -201,17 +211,9 @@
       if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
         const results = handLandmarker.detectForVideo(videoElement, startTimeMs);
         
-        // Clear canvas
+        // Don't draw camera feed on canvas - video element handles this
+        // Just clear the canvas for drawing
         ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        
-        // Draw camera feed if enabled
-        if (showCamera) {
-          ctx.save();
-          ctx.translate(canvasElement.width, 0);
-          ctx.scale(-1, 1);
-          ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
-          ctx.restore();
-        }
         
         // Process hand landmarks
         if (results.landmarks && results.landmarks.length > 0) {
@@ -366,12 +368,17 @@
     
     toggleBtn.addEventListener('click', () => {
       showCamera = !showCamera;
-      toggleBtn.textContent = showCamera ? 'Hide Camera' : 'Show Camera';
+      if (showCamera) {
+        videoElement.style.display = 'block';
+        toggleBtn.textContent = 'Hide Camera';
+      } else {
+        videoElement.style.display = 'none';
+        toggleBtn.textContent = 'Show Camera';
+      }
     });
     
-    // Initialize canvas
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+    // Initialize canvas with transparent background
+    ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
     
     // Start the app
     initializeHandLandmarker();
