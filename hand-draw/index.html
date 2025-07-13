@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hand-Tracked Drawing App</title>
+  <style>
+    body, html { margin:0; padding:0; overflow:hidden; font-family:sans-serif; }
+    video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; }
+    #ui {
+      position:absolute; top:10px; left:10px; display:flex; gap:8px;
+      background:rgba(255,255,255,0.8); padding:6px; border-radius:4px; z-index:10;
+    }
+    #tutorial {
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      background:rgba(0,0,0,0.7); color:#fff;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      text-align:center; padding:20px; box-sizing:border-box; z-index:20;
+    }
+    #tutorial button { margin-top:20px; padding:10px 20px; font-size:16px; }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <input type="color" id="colorPicker" value="#000000"/>
+    <button id="saveBtn">Save</button>
+    <button id="shareBtn">Share</button>
+  </div>
+  <div id="tutorial" style="display:none;">
+    <h1>Welcome!</h1>
+    <p>
+      1. Allow camera access.<br>
+      2. Center your hand in view.<br>
+      3. Point index finger to draw.<br>
+      4. Make a fist to pause.
+    </p>
+    <button id="tutorialBtn">Got it!</button>
+  </div>
+
+  <!-- MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+  <script>
+    const video = document.getElementById('video'),
+          canvas = document.getElementById('canvas'),
+          ctx = canvas.getContext('2d'),
+          colorPicker = document.getElementById('colorPicker'),
+          saveBtn = document.getElementById('saveBtn'),
+          shareBtn = document.getElementById('shareBtn'),
+          tutorial = document.getElementById('tutorial'),
+          tutBtn = document.getElementById('tutorialBtn');
+
+    let drawing = false, lastPos = null, strokeColor = colorPicker.value;
+
+    function isIndexExtended(lm) { return lm[8].y < lm[6].y; }
+    function isFist(lm)        { return [8,12,16,20].every(i => lm[i].y > lm[i-2].y); }
+
+    function onResults({multiHandLandmarks}) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      if (multiHandLandmarks.length) {
+        const lm = multiHandLandmarks[0];
+        if (isIndexExtended(lm)) drawing = true;
+        else if (isFist(lm)) { drawing = false; lastPos = null; }
+
+        if (drawing) {
+          const x = lm[8].x * canvas.width, y = lm[8].y * canvas.height;
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = 4;
+          ctx.lineCap = 'round';
+          if (lastPos) {
+            ctx.beginPath();
+            ctx.moveTo(lastPos.x, lastPos.y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+          }
+          lastPos = {x,y};
+        }
+      } else { drawing = false; lastPos = null; }
+    }
+
+    const hands = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+    hands.setOptions({
+      maxNumHands:1, modelComplexity:1,
+      minDetectionConfidence:0.8, minTrackingConfidence:0.8
+    });
+    hands.onResults(onResults);
+
+    new Camera(video, {
+      onFrame: async () => await hands.send({image: video}),
+      width:640, height:480
+    }).start().catch(() => {
+      alert('Serve via HTTPS/localhost and allow camera access.');
+    });
+
+    colorPicker.addEventListener('input', e => strokeColor = e.target.value);
+
+    saveBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'drawing.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+
+    shareBtn.addEventListener('click', async () => {
+      const dataUrl = canvas.toDataURL('image/png');
+      if (navigator.canShare && navigator.canShare({files:[]})) {
+        const blob = await (await fetch(dataUrl)).blob();
+        const file = new File([blob],'drawing.png',{type:'image/png'});
+        navigator.share({files:[file],title:'My Sketch'}).catch(console.error);
+      } else {
+        try {
+          await navigator.clipboard.writeText(dataUrl);
+          alert('Copied image data URL to clipboard!');
+        } catch {
+          alert('Share not supported—copied URL instead.');
+        }
+      }
+    });
+
+    window.addEventListener('load', () => {
+      if (!localStorage.getItem('tutorialSeen')) tutorial.style.display='flex';
+    });
+    tutBtn.addEventListener('click', () => {
+      tutorial.style.display='none';
+      localStorage.setItem('tutorialSeen','true');
+    });
+  </script>
+</body>
+</html>
